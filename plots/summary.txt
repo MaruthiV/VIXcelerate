@@ -1,0 +1,3 @@
+Serial T1 (wall): 0.002 s
+Best parallel: p=6, T_p=0.001 s
+Speedup T1/Tp: 1.18x  |  Efficiency: 0.20

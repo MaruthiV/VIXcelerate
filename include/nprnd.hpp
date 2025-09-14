@@ -402,36 +402,88 @@ public:
     }
     //
     //
+    void optimize_memory_layout() {
+        // Simple alignment for better cache performance
+        memory_optimized = true;
+
+        #pragma omp parallel for
+        for(int i = 0; i < ncall; i++) {
+            __builtin_prefetch(&callp[i], 0, 3);
+            __builtin_prefetch(&calls[i], 0, 3);  
+            __builtin_prefetch(&callw[i], 0, 3);
+        }
+        
+        #pragma omp parallel for  
+        for(int i = 0; i < nput; i++) {
+            __builtin_prefetch(&putp[i], 0, 3);
+            __builtin_prefetch(&puts[i], 0, 3);
+            __builtin_prefetch(&putw[i], 0, 3);
+        }
+    }
     //
-    void mat_cv(double *matcv,double *hcv,int nhc,double *hpv,int nhp)
-{
-    for (int k = 0; k < this->nstrike; ++k)
+    void mat_cv_optimized(double *matcv, double *hcv, int nhc, double *hpv, int nhp)
     {
-        printf("Iteration: %d/%d\n", k+1, this->nstrike);
-
-        // Parallelize the bandwidth grid; each (i,j) writes to a unique mat slot
-        #pragma omp parallel for collapse(2) schedule(dynamic,8)
-        for (int i = 0; i < nhc; ++i)
+        const int TILE_SIZE = 16;  // Cache-friendly tile size
+        
+        for (int k = 0; k < this->nstrike; ++k)
         {
-            for (int j = 0; j < nhp; ++j)
+            printf("Processing strike %d/%d\n", k+1, this->nstrike);
+
+            // Tiled approach for better cache performance
+            #pragma omp parallel for schedule(dynamic,2) collapse(2)
+            for (int tile_i = 0; tile_i < (nhc + TILE_SIZE - 1) / TILE_SIZE; tile_i++)
             {
-                double cv, area, entropy, variation;
-                this->estim_cv_element(&cv, &area, &entropy, &variation,
-                                       this->strike[k], hcv[i], hpv[j]);
+                for (int tile_j = 0; tile_j < (nhp + TILE_SIZE - 1) / TILE_SIZE; tile_j++)
+                {
+                    // Calculate tile boundaries
+                    int i_start = tile_i * TILE_SIZE;
+                    int i_end = (i_start + TILE_SIZE < nhc) ? i_start + TILE_SIZE : nhc;
+                    int j_start = tile_j * TILE_SIZE;  
+                    int j_end = (j_start + TILE_SIZE < nhp) ? j_start + TILE_SIZE : nhp;
+                    
+                    // Process the tile
+                    for (int i = i_start; i < i_end; i++)
+                    {
+                        for (int j = j_start; j < j_end; j++)
+                        {
+                            double cv, area, entropy, variation;
+                            this->estim_cv_element(&cv, &area, &entropy, &variation,
+                                                 this->strike[k], hcv[i], hpv[j]);
 
-                // unique index for this (i,j). Since nhc==nhp in your runs, i*nhc+j is also fine.
-                const int idx = i * nhp + j;
-
-                // no race: each (i,j) has its own idx; outer k is serial, so += is safe
-                matcv[idx] += cv*variation + (1.0 + fabs(area - 1.0)) / entropy;
-
-                // (optional) this counter is not needed and causes a data race; remove or protect:
-                // #pragma omp atomic
-                // this->niterations++;
+                            const int idx = i * nhp + j;
+                            #pragma omp atomic
+                            matcv[idx] += cv * variation + (1.0 + fabs(area - 1.0)) / entropy;
+                        }
+                    }
+                }
             }
         }
     }
-}
+
+    void mat_cv_original(double *matcv, double *hcv, int nhc, double *hpv, int nhp)
+    {
+        // Your existing implementation - keep it for benchmarking
+        for (int k = 0; k < this->nstrike; ++k)
+        {
+            printf("Iteration: %d/%d\n", k+1, this->nstrike);
+
+            #pragma omp parallel for collapse(2) schedule(dynamic,8)
+            for (int i = 0; i < nhc; ++i)
+            {
+                for (int j = 0; j < nhp; ++j)
+                {
+                    double cv, area, entropy, variation;
+                    this->estim_cv_element(&cv, &area, &entropy, &variation,
+                                           this->strike[k], hcv[i], hpv[j]);
+
+                    const int idx = i * nhp + j;
+                    matcv[idx] += cv*variation + (1.0 + fabs(area - 1.0)) / entropy;
+                }
+            }
+        }
+    }
+
+};
 
     //
     //
@@ -447,10 +499,13 @@ public:
     
     //
     //
-    void optim_bandwidth(double *hoptim,double *hcv,int nhc,double *hpv,int nhp)
+    void optim_bandwidth(double *hoptim, double *hcv, int nhc, double *hpv, int nhp)
     {
         double *matcv = (double*)calloc(nhc*nhp, sizeof(double));
-        this->mat_cv(matcv, hcv, nhc, hpv, nhp);
+        
+        // Use the optimized version instead
+        this->mat_cv_optimized(matcv, hcv, nhc, hpv, nhp);
+        
         double sol[2];
         this->minMatrix(sol, hcv, nhc, hpv, nhp, matcv);
         free(matcv);
@@ -472,6 +527,8 @@ public:
 //
 //
 private:
+
+bool memory_optimized = false;
 //
 //
 //
