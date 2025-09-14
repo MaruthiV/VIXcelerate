@@ -2,7 +2,7 @@
 
 VIXcelerate demonstrates **advanced parallel computing techniques** applied to quantitative finance, achieving **6.9x speedup** through sophisticated CPU optimization strategies. The system calibrates VIX-style **nonparametric risk-neutral densities (RND)** by parallelizing millions of quadratic programming solves across multi-core architectures.
 
-![Performance Results](plots/performance_comparison.png)
+![Performance Results](plots/runtime_comparison.png)
 
 ## 🚀 Performance Breakthrough
 
